@@ -1,0 +1,5 @@
+// icon.rc
+#include <windows.h>
+
+// Define the icon resource
+101 ICON "sg.ico"

@@ -1,0 +1,2 @@
+mspaint.exe
+CompatTelRunner.exe
