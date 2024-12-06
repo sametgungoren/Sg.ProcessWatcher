@@ -2,11 +2,33 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "CMake Debug",
+            "name": "CMake Debug Script",
             "type": "cmake",
             "request": "launch",
             "cmakeDebugType": "script",
-            "scriptPath": "${workspaceFolder}/cmake_debug.cmake"
+            "scriptPath": "${workspaceFolder}/cmake_debug.cmake",
+            "trace": true,
+            "tracePath": "${workspaceFolder}/cmake_debug.trace",
+            "environment": [
+                {
+                    "name": "CMAKE_BUILD_TYPE",
+                    "value": "Debug"
+                }
+            ]
+        },
+        {
+            "name": "CMake Configure Debug",
+            "type": "cmake",
+            "request": "launch",
+            "cmakeDebugType": "configure",
+            "clean": true,
+            "configureAll": true,
+            "environment": [
+                {
+                    "name": "CMAKE_BUILD_TYPE",
+                    "value": "Debug"
+                }
+            ]
         },
         {
             "name": "Process Watcher Debug",
