@@ -62,7 +62,7 @@ private:
     std::vector<std::string> blockedProcesses;
     std::atomic<bool> isRunning{true};
     std::thread monitorThread;
-    std::atomic<bool> shouldExit{true};  
+    std::atomic<bool> shouldExit{false};  // Changed from true to false
     HMENU hTrayMenu;  
 
     void initSystemTray() {
@@ -124,48 +124,56 @@ private:
                 std::wstring wProcessName = pe32.szExeFile;
                 std::string currentProcessName(wProcessName.begin(), wProcessName.end());
                 
-                // More verbose logging and matching
-                std::cout << "Checking process: " << currentProcessName 
-                          << " (PID: " << pe32.th32ProcessID << ")" << std::endl;
-                
+                // Case-insensitive comparison
                 if (_stricmp(currentProcessName.c_str(), processName.c_str()) == 0) {
                     processFound = true;
-                    
-                    // Try multiple access rights
-                    DWORD accessRights[] = {
-                        PROCESS_TERMINATE, 
-                        PROCESS_ALL_ACCESS, 
-                        DELETE | PROCESS_QUERY_INFORMATION
-                    };
+                    std::cout << "Found process to terminate: " << currentProcessName 
+                              << " (PID: " << pe32.th32ProcessID << ")" << std::endl;
 
+                    // Skip system processes
+                    if (pe32.th32ProcessID == 0 || pe32.th32ProcessID == 4) {
+                        std::cout << "Skipping system process" << std::endl;
+                        continue;
+                    }
+
+                    // Try multiple termination strategies
                     bool terminated = false;
-                    for (DWORD access : accessRights) {
-                        HANDLE hProcess = OpenProcess(access, FALSE, pe32.th32ProcessID);
-                        if (hProcess != NULL) {
-                            std::cout << "Attempting to terminate process with access rights: " 
-                                      << std::hex << access << std::dec << std::endl;
 
-                            // Multiple termination strategies
-                            if (TerminateProcess(hProcess, 1)) {
-                                std::cout << "Successfully terminated process: " 
-                                          << processName << " (PID: " 
-                                          << pe32.th32ProcessID << ")" << std::endl;
-                                terminated = true;
-                            } else {
-                                DWORD error = GetLastError();
-                                std::cerr << "TerminateProcess failed. Error code: " 
-                                          << error << std::endl;
-                            }
-
-                            CloseHandle(hProcess);
-                            
-                            if (terminated) break;
-                        } else {
-                            DWORD error = GetLastError();
-                            std::cerr << "OpenProcess failed with access rights " 
-                                      << std::hex << access << std::dec 
-                                      << ". Error code: " << error << std::endl;
+                    // Strategy 1: Direct termination with PROCESS_TERMINATE
+                    HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pe32.th32ProcessID);
+                    if (hProcess != NULL) {
+                        if (TerminateProcess(hProcess, 1)) {
+                            terminated = true;
+                            std::cout << "Successfully terminated process with PROCESS_TERMINATE" << std::endl;
                         }
+                        CloseHandle(hProcess);
+                    }
+
+                    // Strategy 2: Full access rights if first attempt failed
+                    if (!terminated) {
+                        hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pe32.th32ProcessID);
+                        if (hProcess != NULL) {
+                            if (TerminateProcess(hProcess, 1)) {
+                                terminated = true;
+                                std::cout << "Successfully terminated process with PROCESS_ALL_ACCESS" << std::endl;
+                            }
+                            CloseHandle(hProcess);
+                        }
+                    }
+
+                    // Strategy 3: Use taskkill command as a last resort
+                    if (!terminated) {
+                        std::string cmd = "taskkill /F /IM " + processName + " /T";
+                        std::cout << "Attempting taskkill command: " << cmd << std::endl;
+                        int result = system(cmd.c_str());
+                        if (result == 0) {
+                            terminated = true;
+                            std::cout << "Successfully terminated process with taskkill" << std::endl;
+                        }
+                    }
+
+                    if (!terminated) {
+                        std::cerr << "Failed to terminate process after all attempts" << std::endl;
                     }
                 }
             } while (Process32NextW(snapshot, &pe32));
@@ -226,38 +234,63 @@ private:
                 break;  
             }
 
-            HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-            if (snapshot != INVALID_HANDLE_VALUE) {
-                PROCESSENTRY32W pe32;
-                pe32.dwSize = sizeof(pe32);
-
-                if (Process32FirstW(snapshot, &pe32)) {
-                    do {
-                        std::wstring wProcessName = pe32.szExeFile;
-                        std::string processName(wProcessName.begin(), wProcessName.end());
-
-                        for (const auto& blockedProcess : blockedProcesses) {
-                            if (_stricmp(processName.c_str(), blockedProcess.c_str()) == 0) {
-                                std::cout << "Found blocked process: " << processName 
-                                          << " (PID: " << pe32.th32ProcessID << ")" << std::endl;
-                                killProcess(blockedProcess);
-                                break;
-                            }
-                        }
-                    } while (Process32NextW(snapshot, &pe32));
-                }
-                CloseHandle(snapshot);
-            } else {
-                std::cerr << "Failed to create process snapshot" << std::endl;
+            // Skip if no processes to monitor
+            if (blockedProcesses.empty()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
             }
+
+            try {
+                HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                if (snapshot != INVALID_HANDLE_VALUE) {
+                    PROCESSENTRY32W pe32;
+                    pe32.dwSize = sizeof(pe32);
+
+                    if (Process32FirstW(snapshot, &pe32)) {
+                        do {
+                            if (!isRunning || shouldExit) break;
+
+                            std::wstring wProcessName = pe32.szExeFile;
+                            std::string processName(wProcessName.begin(), wProcessName.end());
+
+                            // Skip system processes
+                            if (pe32.th32ProcessID == 0 || pe32.th32ProcessID == 4) {
+                                continue;
+                            }
+
+                            for (const auto& blockedProcess : blockedProcesses) {
+                                if (_stricmp(processName.c_str(), blockedProcess.c_str()) == 0) {
+                                    std::cout << "Found blocked process: " << processName 
+                                              << " (PID: " << pe32.th32ProcessID << ")" << std::endl;
+                                    
+                                    try {
+                                        killProcess(blockedProcess);
+                                    }
+                                    catch (const std::exception& e) {
+                                        std::cerr << "Error killing process: " << e.what() << std::endl;
+                                    }
+                                    break;
+                                }
+                            }
+                        } while (Process32NextW(snapshot, &pe32));
+                    }
+                    CloseHandle(snapshot);
+                } else {
+                    std::cerr << "Failed to create process snapshot. Error: " << GetLastError() << std::endl;
+                }
+            }
+            catch (const std::exception& e) {
+                std::cerr << "Error in monitoring loop: " << e.what() << std::endl;
+            }
+
+            // Sleep between iterations to reduce CPU usage
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
         std::cout << "Process monitoring loop ended." << std::endl;
     }
 
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
-        ProcessWatcher* pWatcher = reinterpret_cast<ProcessWatcher*>(
-            GetWindowLongPtr(hWnd, GWLP_USERDATA));
+        ProcessWatcher* pWatcher = reinterpret_cast<ProcessWatcher*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
 
         switch (message) {
             case WM_CREATE: {
