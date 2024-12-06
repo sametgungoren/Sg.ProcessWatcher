@@ -1,4 +1,13 @@
 cmake_minimum_required(VERSION 3.10)
+
+# Enable CMake debugging
+set(CMAKE_DEBUG_TARGET_PROPERTIES
+    INCLUDE_DIRECTORIES
+    COMPILE_DEFINITIONS
+    COMPILE_OPTIONS
+    COMPILE_FEATURES
+)
+
 project(Sg.ProcessWatcher)
 
 # Set C++ standard
@@ -28,8 +37,17 @@ set_target_properties(Sg.ProcessWatcher PROPERTIES
 
 # Set compiler flags for optimization and low resource usage
 if(MSVC)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /O2 /GL")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /LTCG")
+    # Debug configuration
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Zi /Od /RTC1")
+    set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} /DEBUG")
+    
+    # Release configuration
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /GL")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /LTCG")
 elseif(CMAKE_COMPILER_IS_GNUCXX)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -s")
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -s")
 endif()
+
+# Enable Visual Studio debugging
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT Sg.ProcessWatcher)

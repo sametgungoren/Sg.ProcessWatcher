@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "CMake Debug",
+            "type": "cmake",
+            "request": "launch",
+            "cmakeDebugType": "script",
+            "scriptPath": "${workspaceFolder}/cmake_debug.cmake"
+        },
+        {
+            "name": "Process Watcher Debug",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/Sg.ProcessWatcher.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "externalTerminal"
+        }
+    ]
+}
