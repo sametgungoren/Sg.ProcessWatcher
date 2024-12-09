@@ -52,6 +52,20 @@ void ClosePreviousInstances() {
     CloseHandle(snapshot);
 }
 
+// Logging function
+void logMessage(const std::string& message) {
+    std::ofstream logFile("process_watcher.log", std::ios::app);
+    if (logFile.is_open()) {
+        auto now = std::chrono::system_clock::now();
+        std::time_t time = std::chrono::system_clock::to_time_t(now);
+        char timeStr[26];
+        ctime_s(timeStr, sizeof(timeStr), &time);
+        timeStr[24] = '\0';  // Remove newline
+        logFile << "[" << timeStr << "] " << message << std::endl;
+        logFile.close();
+    }
+}
+
 class ProcessWatcher {
 private:
     HWND hMainWnd;
@@ -82,6 +96,7 @@ private:
     }
 
     void readBlockedProcesses() {
+        logMessage("Reading blocked processes from file");
         std::ifstream file("blocked_processes.txt");
         std::string process;
         blockedProcesses.clear();
@@ -90,7 +105,7 @@ private:
         if (!file.good()) {
             std::ofstream createFile("blocked_processes.txt");
             createFile.close();
-            std::cout << "Created blocked_processes.txt" << std::endl;
+            logMessage("Created new blocked_processes.txt file");
             return;
         }
 
@@ -99,8 +114,127 @@ private:
                 blockedProcesses.push_back(process);
                 SendMessageW(hListBox, LB_ADDSTRING, 0, 
                     reinterpret_cast<LPARAM>(std::wstring(process.begin(), process.end()).c_str()));
+                logMessage("Loaded blocked process: " + process);
             }
         }
+        logMessage("Finished reading blocked processes");
+    }
+
+    void saveBlockedProcesses() {
+        logMessage("Saving blocked processes to file");
+        std::ofstream file("blocked_processes.txt");
+        for (const auto& process : blockedProcesses) {
+            file << process << std::endl;
+            logMessage("Saved process: " + process);
+        }
+        logMessage("Finished saving blocked processes");
+    }
+
+    void addBlockedProcess(const std::string& processName) {
+        logMessage("Attempting to add process: " + processName);
+        if (std::find(blockedProcesses.begin(), blockedProcesses.end(), processName) == blockedProcesses.end()) {
+            blockedProcesses.push_back(processName);
+            SendMessageW(hListBox, LB_ADDSTRING, 0, 
+                reinterpret_cast<LPARAM>(std::wstring(processName.begin(), processName.end()).c_str()));
+            saveBlockedProcesses();
+            logMessage("Successfully added process: " + processName);
+        } else {
+            logMessage("Process already exists in list: " + processName);
+        }
+    }
+
+    void removeBlockedProcess() {
+        int selectedIndex = SendMessage(hListBox, LB_GETCURSEL, 0, 0);
+        if (selectedIndex != LB_ERR) {
+            wchar_t buffer[MAX_PATH];
+            SendMessageW(hListBox, LB_GETTEXT, selectedIndex, (LPARAM)buffer);
+            std::wstring wProcessName = buffer;
+            std::string processName(wProcessName.begin(), wProcessName.end());
+            
+            logMessage("Removing process: " + processName);
+            
+            auto it = std::find(blockedProcesses.begin(), blockedProcesses.end(), processName);
+            if (it != blockedProcesses.end()) {
+                blockedProcesses.erase(it);
+                SendMessage(hListBox, LB_DELETESTRING, selectedIndex, 0);
+                saveBlockedProcesses();
+                logMessage("Successfully removed process: " + processName);
+            }
+        } else {
+            logMessage("No process selected for removal");
+        }
+    }
+
+    void monitorLoop() {
+        logMessage("Starting process monitoring loop...");
+        std::cout << "Blocked Processes: ";
+        for (const auto& process : blockedProcesses) {
+            std::cout << process << " ";
+        }
+        std::cout << std::endl;
+
+        while (isRunning) {
+            if (shouldExit) {
+                std::cout << "Monitoring loop exiting due to shouldExit flag" << std::endl;
+                break;  
+            }
+
+            // Skip if no processes to monitor
+            if (blockedProcesses.empty()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
+
+            try {
+                HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                if (snapshot != INVALID_HANDLE_VALUE) {
+                    PROCESSENTRY32W pe32;
+                    pe32.dwSize = sizeof(pe32);
+
+                    if (Process32FirstW(snapshot, &pe32)) {
+                        do {
+                            if (!isRunning || shouldExit) break;
+
+                            std::wstring wProcessName = pe32.szExeFile;
+                            std::string processName(wProcessName.begin(), wProcessName.end());
+
+                            // Skip system processes
+                            if (pe32.th32ProcessID == 0 || pe32.th32ProcessID == 4) {
+                                continue;
+                            }
+
+                            for (const auto& blockedProcess : blockedProcesses) {
+                                if (_stricmp(processName.c_str(), blockedProcess.c_str()) == 0) {
+                                    std::cout << "Found blocked process: " << processName 
+                                              << " (PID: " << pe32.th32ProcessID << ")" << std::endl;
+                                    
+                                    try {
+                                        logMessage("Terminating blocked process: " + processName);
+                                        killProcess(blockedProcess);
+                                        logMessage("Successfully terminated process: " + processName);
+                                    }
+                                    catch (const std::exception& e) {
+                                        std::cerr << "Error killing process: " << e.what() << std::endl;
+                                    }
+                                    break;
+                                }
+                            }
+                        } while (Process32NextW(snapshot, &pe32));
+                    }
+                    CloseHandle(snapshot);
+                } else {
+                    std::cerr << "Failed to create process snapshot. Error: " << GetLastError() << std::endl;
+                }
+            }
+            catch (const std::exception& e) {
+                std::cerr << "Error in monitoring loop: " << e.what() << std::endl;
+            }
+
+            // Sleep between iterations to reduce CPU usage
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        logMessage("Process monitoring loop ended.");
+        std::cout << "Process monitoring loop ended." << std::endl;
     }
 
     void killProcess(const std::string& processName) {
@@ -184,109 +318,6 @@ private:
         if (!processFound) {
             std::cout << "No matching process found for: " << processName << std::endl;
         }
-    }
-
-    void saveBlockedProcesses() {
-        std::ofstream file("blocked_processes.txt");
-        for (const auto& process : blockedProcesses) {
-            file << process << std::endl;
-        }
-    }
-
-    void addBlockedProcess(const std::string& processName) {
-        if (std::find(blockedProcesses.begin(), blockedProcesses.end(), processName) == blockedProcesses.end()) {
-            blockedProcesses.push_back(processName);
-            SendMessageW(hListBox, LB_ADDSTRING, 0, 
-                reinterpret_cast<LPARAM>(std::wstring(processName.begin(), processName.end()).c_str()));
-            saveBlockedProcesses();
-        }
-    }
-
-    void removeBlockedProcess() {
-        int selectedIndex = SendMessage(hListBox, LB_GETCURSEL, 0, 0);
-        if (selectedIndex != LB_ERR) {
-            wchar_t buffer[MAX_PATH];
-            SendMessageW(hListBox, LB_GETTEXT, selectedIndex, (LPARAM)buffer);
-            std::wstring wProcessName = buffer;
-            std::string processName(wProcessName.begin(), wProcessName.end());
-
-            blockedProcesses.erase(
-                std::remove(blockedProcesses.begin(), blockedProcesses.end(), processName),
-                blockedProcesses.end()
-            );
-
-            SendMessage(hListBox, LB_DELETESTRING, selectedIndex, 0);
-            saveBlockedProcesses();
-        }
-    }
-
-    void monitorLoop() {
-        std::cout << "Starting process monitoring loop..." << std::endl;
-        std::cout << "Blocked Processes: ";
-        for (const auto& process : blockedProcesses) {
-            std::cout << process << " ";
-        }
-        std::cout << std::endl;
-
-        while (isRunning) {
-            if (shouldExit) {
-                std::cout << "Monitoring loop exiting due to shouldExit flag" << std::endl;
-                break;  
-            }
-
-            // Skip if no processes to monitor
-            if (blockedProcesses.empty()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                continue;
-            }
-
-            try {
-                HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-                if (snapshot != INVALID_HANDLE_VALUE) {
-                    PROCESSENTRY32W pe32;
-                    pe32.dwSize = sizeof(pe32);
-
-                    if (Process32FirstW(snapshot, &pe32)) {
-                        do {
-                            if (!isRunning || shouldExit) break;
-
-                            std::wstring wProcessName = pe32.szExeFile;
-                            std::string processName(wProcessName.begin(), wProcessName.end());
-
-                            // Skip system processes
-                            if (pe32.th32ProcessID == 0 || pe32.th32ProcessID == 4) {
-                                continue;
-                            }
-
-                            for (const auto& blockedProcess : blockedProcesses) {
-                                if (_stricmp(processName.c_str(), blockedProcess.c_str()) == 0) {
-                                    std::cout << "Found blocked process: " << processName 
-                                              << " (PID: " << pe32.th32ProcessID << ")" << std::endl;
-                                    
-                                    try {
-                                        killProcess(blockedProcess);
-                                    }
-                                    catch (const std::exception& e) {
-                                        std::cerr << "Error killing process: " << e.what() << std::endl;
-                                    }
-                                    break;
-                                }
-                            }
-                        } while (Process32NextW(snapshot, &pe32));
-                    }
-                    CloseHandle(snapshot);
-                } else {
-                    std::cerr << "Failed to create process snapshot. Error: " << GetLastError() << std::endl;
-                }
-            }
-            catch (const std::exception& e) {
-                std::cerr << "Error in monitoring loop: " << e.what() << std::endl;
-            }
-
-            // Sleep between iterations to reduce CPU usage
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
-        std::cout << "Process monitoring loop ended." << std::endl;
     }
 
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
